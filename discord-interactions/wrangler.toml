@@ -1,0 +1,17 @@
+# Cloudflare Worker that receives Discord slash-command interactions.
+#
+# Secrets (set with `npx wrangler secret put <NAME>`):
+#   DISCORD_PUBLIC_KEY    - from the Discord application's General Information page
+#   DATABASE_URL          - Turso libsql:// URL (same as the main app)
+#   DATABASE_AUTH_TOKEN   - Turso auth token
+#   GITHUB_TOKEN          - optional; fine-grained PAT with Actions read/write, enables /scan
+
+name = "flight-radar-discord"
+main = "src/index.ts"
+compatibility_date = "2025-10-01"
+
+[vars]
+# owner/repo of this project on GitHub (needed for /scan)
+GITHUB_REPOSITORY = "chen252528-glitch/G-Ticket"
+# branch that workflow_dispatch should run against
+GITHUB_REF = "main"

@@ -1,0 +1,20 @@
+{
+  "name": "flight-radar-discord-interactions",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "register-commands": "node scripts/register-commands.mjs"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "typescript": "^5.6.3",
+    "wrangler": "^4.0.0"
+  }
+}
