@@ -66,9 +66,18 @@ slash commands 雙向互動（查價、管理航線、手動觸發掃描）。
   不用 GitHub Actions 了。兩個 workflow 的 `schedule:` 觸發已移除（失敗信元凶,business-deals 原本
   **每小時**寄一封）,只留 `workflow_dispatch` 手動觸發。GitHub Secrets 因此**不再必要**
   （除非未來要用 /scan 或手動 dispatch）。
-  **Linux 機部署步驟**（詳見下方使用者訊息紀錄;.env 用 scp/USB 搬,別走雲端/聊天）：
-  clone → `npm ci && npm run build` → 複製家用機 `.env` → crontab `0 8,20 * * *`（若系統時區 UTC 則
-  `0 0,12`）跑 `npm run job:normal-fares`。business-deals 先不排（缺 RSS 真值與 OPENAI_API_KEY）。
+  **Linux 機部署完成（2026-07-05 深夜）**：主機 `palserver`（root 操作）,路徑
+  `/home/palserver/Desktop/G-Ticket`。過程：repo 改公開後 clone（原私有,clone 會要登入;
+  Danger Zone 改 visibility 要輸入 repo 全名確認）→ 系統內建 Node 是 v12 古董 → nvm 裝 Node 22 →
+  `npm ci && npm run build` → `.env` 從家用機搬過去 → `npm run job:normal-fares`
+  **11 秒成功跑完**。business-deals 先不排（缺 RSS 真值與 OPENAI_API_KEY）。
+  cron 設定注意:**nvm 在 cron 的 bash -lc 下不會載入**（Ubuntu .bashrc 的互動性 guard 在 nvm 初始化
+  之前就 return）→ crontab 行內要塞絕對 PATH（`dirname $(which node)`）。
+  **SerpApi 額度（2026-07-05 用 account API 實查）：Free Plan = 250 次/月**（別信舊筆記的 100）。
+  **排程定案：一天一掃（crontab `0 8 * * *`,本地時間早上 8 點）**。每條航線月成本 31 次:
+  現行 2 條 = 62/月,台北全開 5 條 = 155/月,上限約 8 條。早晚兩掃的話上限只有 4 條（貼死）。
+  查用量：`https://serpapi.com/account?api_key=<key>`。未來想「重要航線掃勤一點」需改碼
+  （航線加頻率欄位）,列入待修清單。
   也可改用 `npm start`（main.js 內建排程器,吃 NORMAL_FARES_CRON/RUN_*_ON_STARTUP 環境變數）。
 
 ### 本日踩坑備忘（Windows 部署必讀）
