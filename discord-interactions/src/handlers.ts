@@ -1,4 +1,5 @@
 import type { Env } from "./env";
+import { getJpyToTwdRate } from "./rates";
 import {
   createDb,
   deactivateRoutes,
@@ -17,6 +18,18 @@ const PRICE_VERDICT_BAND_PERCENT = 5;
 
 const VALID_CABINS = ["economy", "premium_economy", "business", "first"];
 const VALID_TRIPS = ["round_trip", "one_way"];
+
+const CABIN_ZH: Record<string, string> = {
+  economy: "經濟艙",
+  premium_economy: "豪華經濟艙",
+  business: "商務艙",
+  first: "頭等艙"
+};
+
+const TRIP_ZH: Record<string, string> = {
+  round_trip: "來回",
+  one_way: "單程"
+};
 
 export interface CommandOption {
   name: string;
@@ -49,7 +62,7 @@ export async function handleCommand(interaction: Interaction, env: Env): Promise
   } catch (error) {
     console.error("[discord] command failed", error);
     payload = {
-      content: `⚠️ Command failed: ${error instanceof Error ? error.message : "unknown error"}`
+      content: `⚠️ 指令執行失敗:${error instanceof Error ? error.message : "未知錯誤"}`
     };
   }
 
@@ -80,7 +93,7 @@ async function routeCommand(interaction: Interaction, env: Env): Promise<FollowU
     case "status":
       return handleStatus(env);
     default:
-      return { content: `Unknown command: ${commandName ?? "<none>"}` };
+      return { content: `未知的指令:${commandName ?? "<無>"}` };
   }
 }
 
@@ -88,7 +101,7 @@ async function handleTrack(interaction: Interaction, env: Env): Promise<FollowUp
   const subcommand = interaction.data?.options?.[0];
 
   if (!subcommand) {
-    return { content: "Missing subcommand." };
+    return { content: "缺少子指令。" };
   }
 
   const db = createDb(env);
@@ -97,11 +110,11 @@ async function handleTrack(interaction: Interaction, env: Env): Promise<FollowUp
     const routes = await listActiveRoutes(db);
 
     if (routes.length === 0) {
-      return { content: "No active tracked routes. Add one with `/track add`." };
+      return { content: "目前沒有監控中的航線。用 `/track add` 新增。" };
     }
 
     const lines = routes.map((route) => `• ${formatRoute(route)}`);
-    return { content: `**Active tracked routes (${routes.length})**\n${lines.join("\n")}` };
+    return { content: `**目前監控中的航線(${routes.length} 條)**\n${lines.join("\n")}` };
   }
 
   const origin = requireAirportCode(subcommand.options, "origin");
@@ -116,21 +129,25 @@ async function handleTrack(interaction: Interaction, env: Env): Promise<FollowUp
     await upsertRoute(db, { id, origin, destination, cabin: cabinClass, trip });
 
     return {
-      content: `✅ Tracking **${origin} → ${destination}** (${cabinClass}, ${trip}). The next normal-fares scan will pick it up.`
+      content: [
+        `✅ 已開始監控 **${origin} → ${destination}**(${CABIN_ZH[cabinClass] ?? cabinClass},${TRIP_ZH[trip] ?? trip})。`,
+        "⚠️ 注意:此指令目前不會設定出發/回程日期,排程掃描還不支援無日期的航線 — 請先找 Claude 幫這條航線補日期,否則掃描會失敗。"
+      ].join("\n")
     };
   }
 
   if (subcommand.name === "remove") {
     const removed = await deactivateRoutes(db, origin, destination, cabin);
+    const cabinSuffix = cabin ? `(${CABIN_ZH[cabin] ?? cabin})` : "";
 
     if (removed === 0) {
-      return { content: `No active tracked route found for **${origin} → ${destination}**${cabin ? ` (${cabin})` : ""}.` };
+      return { content: `沒有找到符合的監控航線 **${origin} → ${destination}**${cabinSuffix}。` };
     }
 
-    return { content: `🛑 Stopped tracking ${removed} route(s) for **${origin} → ${destination}**${cabin ? ` (${cabin})` : ""}.` };
+    return { content: `🛑 已停止監控 ${removed} 條 **${origin} → ${destination}**${cabinSuffix} 航線。` };
   }
 
-  return { content: `Unknown subcommand: ${subcommand.name}` };
+  return { content: `未知的子指令:${subcommand.name}` };
 }
 
 async function handlePrice(interaction: Interaction, env: Env): Promise<FollowUpPayload> {
@@ -138,20 +155,21 @@ async function handlePrice(interaction: Interaction, env: Env): Promise<FollowUp
   const origin = requireAirportCode(options, "origin");
   const destination = requireAirportCode(options, "destination");
   const cabin = normalizeChoice(getStringOption(options, "cabin"), VALID_CABINS);
+  const cabinSuffix = cabin ? `(${CABIN_ZH[cabin] ?? cabin})` : "";
 
   const db = createDb(env);
   const routes = await findActiveRoutes(db, origin, destination, cabin);
 
   if (routes.length === 0) {
     return {
-      content: `No active tracked route for **${origin} → ${destination}**${cabin ? ` (${cabin})` : ""}. Add one with \`/track add\`.`
+      content: `沒有監控中的 **${origin} → ${destination}**${cabinSuffix} 航線。用 \`/track add\` 新增。`
     };
   }
 
   if (routes.length > 1) {
-    const lines = routes.map((route) => `• ${route.cabin} (${route.trip})`);
+    const lines = routes.map((route) => `• ${CABIN_ZH[route.cabin] ?? route.cabin}(${TRIP_ZH[route.trip] ?? route.trip})`);
     return {
-      content: `Multiple tracked routes match **${origin} → ${destination}** — re-run \`/price\` with the \`cabin\` option:\n${lines.join("\n")}`
+      content: `**${origin} → ${destination}** 符合多條監控航線 — 請加上 \`cabin\` 選項重查:\n${lines.join("\n")}`
     };
   }
 
@@ -160,19 +178,26 @@ async function handlePrice(interaction: Interaction, env: Env): Promise<FollowUp
 
   if (!snapshot) {
     return {
-      content: `**${formatRoute(route)}** has no fare observations yet. Trigger a scan with \`/scan normal-fares\` and try again.`
+      content: `**${formatRoute(route)}** 還沒有票價紀錄。用 \`/scan job:normal-fares\` 觸發掃描後再試。`
     };
   }
 
+  const twdRate = route.currencyCode === "JPY" ? await getJpyToTwdRate() : null;
   const stats = await getDailyLowStats(db, route.id, snapshot.latestDate, PRICE_WINDOW_DAYS);
-  const currentLine = `Current cheapest (${snapshot.latestDate}): **${formatMoney(route.currencyCode, snapshot.currentLowMinor)}**`;
+  const headerLines = [
+    `**${formatRoute(route)}**`,
+    `最新掃描(${snapshot.latestDate})最低價:**${formatMoney(route.currencyCode, snapshot.currentLowMinor, twdRate)}**`
+  ];
+
+  if (snapshot.flightSummary) {
+    headerLines.push(`✈️ ${snapshot.flightSummary}`);
+  }
 
   if (!stats || stats.sampleDays === 0) {
     return {
       content: [
-        `**${formatRoute(route)}**`,
-        currentLine,
-        `Not enough history for a ${PRICE_WINDOW_DAYS}-day average yet — check back after a few more scans.`
+        ...headerLines,
+        `歷史資料還不夠計算 ${PRICE_WINDOW_DAYS} 天平均 — 之後多掃幾天再查。`
       ].join("\n")
     };
   }
@@ -181,10 +206,9 @@ async function handlePrice(interaction: Interaction, env: Env): Promise<FollowUp
 
   return {
     content: [
-      `**${formatRoute(route)}**`,
-      currentLine,
-      `${PRICE_WINDOW_DAYS}-day average of daily lows: ${formatMoney(route.currencyCode, stats.averageMinor)} (from ${stats.sampleDays} day(s))`,
-      `${PRICE_WINDOW_DAYS}-day low: ${formatMoney(route.currencyCode, stats.windowLowMinor)}`,
+      ...headerLines,
+      `${PRICE_WINDOW_DAYS} 天每日最低價平均:${formatMoney(route.currencyCode, stats.averageMinor, twdRate)}(樣本 ${stats.sampleDays} 天)`,
+      `${PRICE_WINDOW_DAYS} 天最低:${formatMoney(route.currencyCode, stats.windowLowMinor, twdRate)}`,
       buildVerdictLine(deltaPercent)
     ].join("\n")
   };
@@ -194,12 +218,12 @@ async function handleScan(interaction: Interaction, env: Env): Promise<FollowUpP
   const job = getStringOption(interaction.data?.options, "job");
 
   if (job !== "normal-fares" && job !== "business-deals") {
-    return { content: "Unknown job. Choose `normal-fares` or `business-deals`." };
+    return { content: "未知的工作。請選 `normal-fares` 或 `business-deals`。" };
   }
 
   if (!env.GITHUB_TOKEN || !env.GITHUB_REPOSITORY) {
     return {
-      content: "`/scan` is not configured: set the `GITHUB_TOKEN` secret and the `GITHUB_REPOSITORY` var on the Worker."
+      content: "`/scan` 尚未設定:需要在 Worker 上設定 `GITHUB_TOKEN` secret 與 `GITHUB_REPOSITORY` 變數。"
     };
   }
 
@@ -220,11 +244,11 @@ async function handleScan(interaction: Interaction, env: Env): Promise<FollowUpP
 
   if (response.status !== 204) {
     const body = await response.text();
-    return { content: `⚠️ GitHub dispatch failed with status ${response.status}: ${body.slice(0, 300)}` };
+    return { content: `⚠️ GitHub 觸發失敗(HTTP ${response.status}):${body.slice(0, 300)}` };
   }
 
   return {
-    content: `🚀 Triggered **${job}** on \`${ref}\`. Progress: https://github.com/${env.GITHUB_REPOSITORY}/actions/workflows/${job}.yml`
+    content: `🚀 已觸發 **${job}**(分支 \`${ref}\`)。進度:https://github.com/${env.GITHUB_REPOSITORY}/actions/workflows/${job}.yml`
   };
 }
 
@@ -233,21 +257,21 @@ async function handleStatus(env: Env): Promise<FollowUpPayload> {
   const states = await listJobStates(db);
 
   if (states.length === 0) {
-    return { content: "No job runs recorded yet." };
+    return { content: "還沒有任何工作執行紀錄。" };
   }
 
   const lines = states.map((state) => {
     const parts = [
-      `last started: ${state.lastStartedAt ?? "never"}`,
-      `last success: ${state.lastSucceededAt ?? "never"}`,
-      `last failure: ${state.lastFailedAt ?? "never"}`
+      `上次啟動:${state.lastStartedAt ?? "從未"}`,
+      `上次成功:${state.lastSucceededAt ?? "從未"}`,
+      `上次失敗:${state.lastFailedAt ?? "從未"}`
     ];
 
     if (state.lastError) {
-      parts.push(`last error: ${state.lastError.split("\n")[0].slice(0, 120)}`);
+      parts.push(`最近錯誤:${state.lastError.split("\n")[0].slice(0, 120)}`);
     }
 
-    return `**${state.jobName}** — ${parts.join(" | ")}`;
+    return `**${state.jobName}** — ${parts.join("|")}`;
   });
 
   return { content: lines.join("\n") };
@@ -257,22 +281,43 @@ function buildVerdictLine(deltaPercent: number): string {
   const magnitude = Math.abs(deltaPercent).toFixed(1);
 
   if (deltaPercent <= -PRICE_VERDICT_BAND_PERCENT) {
-    return `✅ **${magnitude}% below** the ${PRICE_WINDOW_DAYS}-day average — 便宜`;
+    return `✅ **比 ${PRICE_WINDOW_DAYS} 天平均便宜 ${magnitude}%** — 可以考慮下手`;
   }
 
   if (deltaPercent >= PRICE_VERDICT_BAND_PERCENT) {
-    return `🔺 **${magnitude}% above** the ${PRICE_WINDOW_DAYS}-day average — 溢價`;
+    return `🔺 **比 ${PRICE_WINDOW_DAYS} 天平均貴 ${magnitude}%** — 屬於溢價`;
   }
 
-  return `➖ Within ±${PRICE_VERDICT_BAND_PERCENT}% of the ${PRICE_WINDOW_DAYS}-day average — 接近平均`;
+  return `➖ 與 ${PRICE_WINDOW_DAYS} 天平均差距在 ±${PRICE_VERDICT_BAND_PERCENT}% 內 — 正常價`;
 }
 
 function formatRoute(route: TrackedRoute): string {
-  return `${route.origin} → ${route.destination} (${route.cabin}, ${route.trip})`;
+  const cabin = CABIN_ZH[route.cabin] ?? route.cabin;
+  const trip = TRIP_ZH[route.trip] ?? route.trip;
+  return `${route.origin} → ${route.destination}(${cabin},${trip})`;
 }
 
-function formatMoney(currencyCode: string, amountMinor: number): string {
-  return `${currencyCode} ${(amountMinor / 100).toFixed(2)}`;
+// JPY renders as ¥ with an optional ≈NT$ conversion; TWD renders as NT$;
+// anything else keeps the generic "CODE amount" form.
+function formatMoney(currencyCode: string, amountMinor: number, jpyToTwdRate?: number | null): string {
+  const amount = amountMinor / 100;
+
+  if (currencyCode === "JPY") {
+    const jpy = `¥${Math.round(amount).toLocaleString("en-US")}`;
+
+    if (typeof jpyToTwdRate === "number" && jpyToTwdRate > 0) {
+      const twd = Math.round(amount * jpyToTwdRate);
+      return `${jpy}(約 NT$${twd.toLocaleString("en-US")})`;
+    }
+
+    return jpy;
+  }
+
+  if (currencyCode === "TWD") {
+    return `NT$${Math.round(amount).toLocaleString("en-US")}`;
+  }
+
+  return `${currencyCode} ${amount.toFixed(2)}`;
 }
 
 function getStringOption(options: CommandOption[] | undefined, name: string): string | undefined {
@@ -284,7 +329,7 @@ function requireAirportCode(options: CommandOption[] | undefined, name: string):
   const value = getStringOption(options, name)?.trim().toUpperCase();
 
   if (!value || !/^[A-Z]{3}$/.test(value)) {
-    throw new Error(`Option "${name}" must be a 3-letter airport/metro code (e.g. LON).`);
+    throw new Error(`選項「${name}」必須是 3 碼機場/都會區代碼(例如 TPE)。`);
   }
 
   return value;
@@ -298,7 +343,7 @@ function normalizeChoice(value: string | undefined, allowed: string[]): string |
   const normalized = value.trim().toLowerCase();
 
   if (!allowed.includes(normalized)) {
-    throw new Error(`Invalid value "${value}". Allowed: ${allowed.join(", ")}.`);
+    throw new Error(`值「${value}」無效。可用:${allowed.join("、")}。`);
   }
 
   return normalized;

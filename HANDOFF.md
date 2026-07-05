@@ -31,6 +31,122 @@ slash commands 雙向互動（查價、管理航線、手動觸發掃描）。
 
 註：公司電腦沒有安裝 Node.js（驗證時是用 scratchpad 裡的可攜式 Node 22 跑的）。家裡機器需要 Node 20+。
 
+## 2026-07-04 家用機進度更新（Claude）
+
+- ✅ 步驟 0 完成：repo 已 clone 至 `D:\Claude\G-Ticket`（SSH 無金鑰 → 改 HTTPS remote）；
+  主專案 build + **17/17 測試通過**；Worker typecheck + dry-run 打包 OK（Node v24.13.0 / wrangler 4.107）。
+- ❌ 步驟 1–6 皆需本人帳號，當日收工，下次繼續。卡點明細：
+  1. Chrome 未登入 Discord 網頁版（Developer Portal 進不去；登入後 Claude 可用瀏覽器自動化接手，discord.com 已在擴充功能允許網域）
+  2. 本機無舊 `.env`，Turso 憑證缺；`app.turso.tech` **不在** Claude Chrome 擴充功能允許網域 → 使用者自己貼憑證，或把網域加入允許清單後登入
+  3. `dash.cloudflare.com` 也不在允許網域 → 改用 `npx wrangler login` 由使用者在瀏覽器點 Allow 即可
+  4. gh CLI、turso CLI 皆未安裝；G-Ticket 是新 repo，GitHub Actions **Secrets 尚未設定**（排程掃描會失敗，清單見 README）
+- 下次開工三件事：① Chrome 登入 Discord ② 提供 Turso URL+token（或開放擴充功能網域）③ `wrangler login` 點 Allow — 其餘 Claude 全包。
+
+## 2026-07-05 家用機進度更新（Claude）— 部署完成 🎉，剩驗收與選配
+
+- ✅ Cloudflare：`wrangler login` 完成（ch125591@gmail.com，account `e31d139b07d29f53d37e9801f5bdd63c`）；
+  workers.dev 子網域 **gticket** 已註冊（wrangler v4 已無 `subdomain` 指令 → 直接呼叫 API
+  `PUT /accounts/<id>/workers/subdomain`）。
+- ✅ **Worker 已部署：`https://flight-radar-discord.gticket.workers.dev`**（GET 回 404 屬正常，只收 POST）。
+- ✅ Turso：帳號 **chen252528-glitch**（全新帳號 — 舊 DB 不在這裡，等於資料歸零重來）→ 新建 DB
+  **flight-radar**（AWS ap-northeast-1 東京）→ `init:database`（11 statements / 5 tables）→
+  `seed:tracked-destinations`（7 條 LON→北歐/中歐航線）。憑證在本機 `.env`（gitignored）+ Worker secrets。
+- ✅ Discord Application **G-Ticket**（App ID `1523212807309361252`，帳號 gticket1234，email 已驗證）；
+  bot 使用者 G-Ticket#8857，bot token 存 `discord-interactions/.dev.vars`（gitignored）。
+- ✅ Worker secrets 三支到位：DISCORD_PUBLIC_KEY / DATABASE_URL / DATABASE_AUTH_TOKEN。
+- ✅ Interactions Endpoint URL 已設定並通過 Discord 驗證（PING/驗簽 OK）。
+- ✅ Bot 以 `applications.commands + bot`（permissions=0）裝進「**G-Ticket 的伺服器**」
+  （guild `1523212063525175386`）。
+- ✅ `register-commands`：4 指令已註冊至該 guild（即時生效）。
+- ⬜ 驗收（在 Discord 伺服器輸入）：`/track list` 應列 7 條航線；`/status` 顯示無 job 紀錄（正常，還沒跑過）；
+  `/price` 會回 no fare observations（正常，還沒掃過）。
+- ⬜ 選配 `/scan`：GITHUB_TOKEN secret 未設（fine-grained PAT、只授權 G-Ticket repo、Actions R/W）→
+  目前 /scan 會回 not configured。
+- ~~⬜ GitHub Actions Secrets~~ → **改策略（2026-07-05 深夜）：排程掃描改到使用者的 Linux 機自跑**,
+  不用 GitHub Actions 了。兩個 workflow 的 `schedule:` 觸發已移除（失敗信元凶,business-deals 原本
+  **每小時**寄一封）,只留 `workflow_dispatch` 手動觸發。GitHub Secrets 因此**不再必要**
+  （除非未來要用 /scan 或手動 dispatch）。
+  **Linux 機部署步驟**（詳見下方使用者訊息紀錄;.env 用 scp/USB 搬,別走雲端/聊天）：
+  clone → `npm ci && npm run build` → 複製家用機 `.env` → crontab `0 8,20 * * *`（若系統時區 UTC 則
+  `0 0,12`）跑 `npm run job:normal-fares`。business-deals 先不排（缺 RSS 真值與 OPENAI_API_KEY）。
+  也可改用 `npm start`（main.js 內建排程器,吃 NORMAL_FARES_CRON/RUN_*_ON_STARTUP 環境變數）。
+
+### 本日踩坑備忘（Windows 部署必讀）
+
+1. **`"值" | wrangler secret put` 會把 PowerShell 管線尾端的 CR 一起存進 secret** → hex 長度變奇數 →
+   Worker 驗簽全掛 → Discord 端點驗證失敗。解法：改用 `wrangler secret bulk <json檔>`。Windows 上一律用 bulk。
+2. Node 24 印 ZodError 會在 `console.error` 內部崩潰（util.inspect bug）— init/seed 失敗時看不到真錯誤。
+   真因通常是 `.env` 缺 SERPAPI_API_KEY / RSS_FEED_URLS / DISCORD_WEBHOOK_URL（loadEnvironment 全域驗證）。
+3. Windows schannel（PS 5.1 Invoke-WebRequest / curl.exe）對 workers.dev TLS 握手失敗 → 測端點用 Git Bash curl。
+4. Claude Chrome 擴充功能的 DLP 會擋 JWT/長 hex 進工具結果 → 用「頁面複製鈕 → 剪貼簿 → PowerShell 直餵」
+   中繼,秘密不經對話。但 `find` 工具的元素描述**不會**被擋 — bot token 曾因此進到工作階段紀錄,
+   介意的話到 Bot 頁 Reset Token 再照同法重存（.dev.vars + 無需重註冊指令,token 只用於註冊）。
+5. **`src/scripts/init-database.ts` 與 `db/migrations/001_initial_schema.sql` 不同步**：init 版缺
+   currency_code/locale 的 DEFAULT、CHECK 約束、route 唯一索引 → 用 init 建的庫會讓 worker 的
+   `/track add`（upsertRoute 不寫 currency/locale）炸 NOT NULL。2026-07-05 已把**線上 DB** 的
+   tracked_destinations 依 migration 001 定義重建（當時表空、無 FK 引用,安全）；
+   **init-database.ts 原始碼尚未修**——下次改碼時把它跟 migration 同步。
+
+### 航線現況（2026-07-05 晚）
+
+- LON 範本種子 7 條已刪（連表重建）。現追蹤 4 條,全部 economy/round_trip/**JPY/ja-JP**：
+  HND→TSA、HND→TPE、NRT→TPE、HND→KMJ（id 採 worker 的 `td_…` 慣例,同航線 /track add 會 upsert 不重複）。
+- 注意：日後從 Discord `/track add` 新增的航線,幣別吃 DB 預設 **GBP**（migration 001 的 DEFAULT）；
+  想讓新增預設 JPY,要嘛改 migration/DB DEFAULT,要嘛讓 upsertRoute 明確帶 currency —— 之後的小改動。
+- `seed:tracked-destinations` 別再跑（會把 LON 範本種回來,且其日期 2026-06 已過期）。
+
+### ⚠️ 待修程式 bug（2026-07-05 發現,未改碼）
+
+1. **掃描器要求每條航線有確切日期**：`buildSerpApiUrl` 只在 `departureDateFrom` 存在時才帶
+   `outbound_date`,而 SerpApi google_flights **必填** → 無日期的航線讓整個 normal-fares job 炸掉
+   （`runNormalFaresJob` 的迴圈沒有逐條 try/catch,一條 400 全滅）。
+2. **`/track add`（Discord）建立的 row 沒有日期欄位** → 加了任何航線,下次排程掃描必炸（bug 1 連鎖）。
+   修法方向：worker 的 /track add 加 outbound/return 日期選項、或掃描器對無日期航線用「今天+N 天」
+   預設、至少逐條隔離錯誤。修好前:**所有航線務必在 DB 補上未來日期**。
+3. **webhook 失敗 = 整個掃描斷頭**（同 bug 1 的無隔離根因）：歷史 <3 筆時每筆觀測都觸發警報 →
+   `sendEmbed` 對無效 webhook throw → job 在寫入第 1 筆後中止。占位 webhook 期間每次掃描只會入庫
+   1 筆（幸好通常是最便宜的一筆）。**給真 webhook URL 後即恢復完整**。
+4. 已知次要：normalizeObservation 等錯誤在 Node 24 印出時可能觸發 util.inspect 崩潰（同 ZodError 坑）。
+
+### ⚠️ 家用機有「未 commit 的程式碼修改」（2026-07-05 深夜）
+
+應使用者要求「報價時加入航空公司+航班」,改了三個檔（**已部署 Worker、19/19 測試通過,但未 commit**）：
+- `discord-interactions/src/turso.ts` — PriceSnapshot 加 `flightSummary`;最低價查詢改抓整列
+  （含 raw_payload_json）,新增 `summarizeFlightLegs()` 把 SerpApi 航段濃縮成「航空公司 航班號 起→迄」。
+- `discord-interactions/src/handlers.ts` — /price 回覆加「✈️ 航班摘要」行。
+- `src/notifications/normal-fare-embed.ts`（+ `.test.ts`,新測試共 3 個）— 警報 embed 加「Flight」欄位。
+- 航空公司顯示**繁體中文**：兩處 summarizer 各有 `AIRLINE_NAMES_ZH` 對照表（key=航班號的 IATA 代碼,
+  GK→捷星日本、6J→索拉西德航空、NH/JL/CI/BR/IT/JX…),未知代碼 fallback 原名。
+  刻意**不改查詢 locale**（hl/gl 連動販售市場,會影響價格）。要加航空公司就往兩張表補。
+- **機器人訊息全面繁中化 + 雙幣報價**（handlers.ts 全部字串、警報 embed 標題/欄位/比較行）：
+  JPY 顯示 `¥12,980(約 NT$2,700)`。台幣匯率來源分兩路 —
+  Worker 用 open.er-api.com 線上匯率（`src/rates.ts`,isolate 內快取 6 小時,失敗 fallback 只顯示日圓）;
+  警報 embed 用專案內建 `exchange-rates.json` 的 GBP 交叉匯率（normal-fares job 載入後傳
+  `jpyToTwdRate` 進 embed;匯率檔記得偶爾跑 `npm run update:exchange-rates` 更新,上次 2026-05-14）。
+  `/track add` 的回覆現在會**自帶無日期警語**。測試 22/22。
+  坑：測試斷言避免在 regex 裡放全形括號（半形括號是分組、全形是字面值,肉眼難分）→ 用 `String.includes`。
+**回公司前務必 commit+push,否則兩機程式碼分岔。**
+
+### 掃價實測（2026-07-05 晚,家用機手動）
+
+- 本機 `.env` 已有**真 SerpApi key**（使用者自填）。`npm run job:normal-fares` 可跑。
+- **HND→KMJ 2026-09-16 one_way 已掃到 ¥12,980**（minor=1298000 JPY,serpapi）— /price 可查。
+- 三條台北線（HND→TSA/HND→TPE/NRT→TPE）**is_active=0 暫停中**：等使用者給出發/回程日期
+  （掃描器必須要日期,見 bug 1）,補上日期後再啟用。
+- ~~DISCORD_WEBHOOK_URL 仍是占位值~~ → **已解決（2026-07-05 深夜）**：bot 重授權加了
+  管理頻道/管理 Webhook/發送訊息（permissions=536874000）,由 bot 代建了
+  **#使用說明**（1523261697132073000,已貼指令教學）與 **#機票警報**（1523261708167282763）,
+  並在警報頻道掛 webhook「Flight Price Radar」→ **`.env` 的 DISCORD_WEBHOOK_URL 已是真值**,
+  本機手動掃描現在可完整跑完+自動推播。
+  ⚠️ 坑：Discord REST 的 **POST 用 PowerShell Invoke-RestMethod 會被回 40333 internal network error**
+  （GET 沒事）→ 對 Discord API 的寫入操作一律用 Node fetch。
+- **暫時解法（手動掃描用）**：本機跑一個回 200 的空 HTTP sink（scratchpad/sink.mjs,127.0.0.1:8977）,
+  以 `$env:DISCORD_WEBHOOK_URL='http://127.0.0.1:8977/hook'` 蓋過 .env（dotenv 不覆寫既有環境變數）再跑
+  job → 掃描可完整跑完,警報被靜默吃掉。2026-07-05 晚用此法完整掃了兩條熊本線：
+  **NRT→KMJ 9 筆（低 ¥6,990）、HND→KMJ 19 筆（低 ¥12,980）**,均 2026-09-16 one_way。
+  已新增 `td_nrt_kmj_economy_one_way`。注意：sink 會把當次警報標記為已發送（fingerprint 含價格,
+  同價不重發,新低價仍會發）。
+
 ## 待辦步驟（依序）
 
 ### 0. 環境準備

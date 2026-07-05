@@ -1,9 +1,8 @@
 name: Normal Fares Scanner
 
+# 排程已移除（2026-07-05）：排程掃描改在自家 Linux 機以 cron 執行（見 HANDOFF.md）。
+# 保留手動觸發（未來 /scan 或緊急補掃用,需先設好 repo Secrets）。
 on:
-  schedule:
-    # 每 12 小時執行一次 (UTC 00:00 和 12:00)
-    - cron: '0 0,12 * * *'
   workflow_dispatch: # 允許手動觸發
 
 jobs:

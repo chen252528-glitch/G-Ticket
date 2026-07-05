@@ -1,6 +1,7 @@
 import type { DiscordWebhookClient } from "../clients/discord.js";
 import type { FlightPriceRepository } from "../db/repositories.js";
 import type { SerpApiClient } from "../clients/serpapi.js";
+import { loadExchangeRates } from "../config/exchange-rates.js";
 import { buildFareAlertFingerprint, qualifiesForTopThreeAlert } from "../logic/fare-ranking.js";
 import { buildNormalFareEmbed } from "../notifications/normal-fare-embed.js";
 import type { NormalizedFareObservation, SerpApiFlightResult, TrackedDestination } from "../types/domain.js";
@@ -28,6 +29,7 @@ export interface NormalFaresJobDeps {
 
 export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void> {
   const destinations = await deps.repository.listActiveTrackedDestinations();
+  const jpyToTwdRate = await resolveJpyToTwdRate();
 
   for (const destination of destinations) {
     const averageDailyLow = await deps.repository.getAverageDailyLowFare(destination.id, FARE_AVERAGE_WINDOW_DAYS);
@@ -75,7 +77,8 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
           historicalLowestPriceAmountMinor: sortedHistoricalPrices[0],
           thirdLowestPriceAmountMinor: sortedHistoricalPrices[2],
           averageDailyLowAmountMinor: averageDailyLow?.averagePriceAmountMinor,
-          averageWindowDays: FARE_AVERAGE_WINDOW_DAYS
+          averageWindowDays: FARE_AVERAGE_WINDOW_DAYS,
+          jpyToTwdRate
         }));
 
         await deps.repository.recordFareAlert({
@@ -135,4 +138,23 @@ function isUniqueConstraintError(error: unknown): boolean {
 
 function buildProviderQueryKey(trackedDestinationId: string, searchOriginAirportCode: string): string {
   return `serpapi:${trackedDestinationId}:search-origin=${searchOriginAirportCode}`;
+}
+
+// Cross rate derived from the bundled GBP-based exchange-rates.json; refresh
+// it with `npm run update:exchange-rates`. Alerts fall back to JPY-only
+// display when the rates file is unavailable.
+async function resolveJpyToTwdRate(): Promise<number | undefined> {
+  try {
+    const rates = await loadExchangeRates();
+    const jpy = rates.rates.JPY;
+    const twd = rates.rates.TWD;
+
+    if (typeof jpy === "number" && typeof twd === "number" && twd > 0) {
+      return jpy / twd;
+    }
+  } catch {
+    // fall through to JPY-only display
+  }
+
+  return undefined;
 }

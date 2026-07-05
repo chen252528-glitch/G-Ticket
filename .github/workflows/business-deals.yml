@@ -1,10 +1,8 @@
 name: Business Deals Scanner
 
+# 排程已移除（2026-07-05）：Secrets 未設導致每小時寄失敗信;
+# 排程掃描改在自家 Linux 機以 cron 執行（見 HANDOFF.md）。保留手動觸發。
 on:
-  schedule:
-    # 每小時執行一次（注意：cron 分鐘欄位的 */45 並不是「每 45 分鐘」，
-    # 而是每小時的 :00 和 :45 各跑一次，等於一天 48 次）
-    - cron: '0 * * * *'
   workflow_dispatch: # 允許手動觸發
 
 jobs:

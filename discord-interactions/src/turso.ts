@@ -13,6 +13,7 @@ export interface TrackedRoute {
 export interface PriceSnapshot {
   latestDate: string;
   currentLowMinor: number;
+  flightSummary?: string;
 }
 
 export interface DailyLowStats {
@@ -138,10 +139,12 @@ export async function getLatestPriceSnapshot(db: Client, trackedDestinationId: s
 
   const low = await db.execute({
     sql: `
-      SELECT MIN(price_amount_minor) AS current_low
+      SELECT price_amount_minor AS current_low, raw_payload_json
       FROM fare_observations
       WHERE tracked_destination_id = ?
         AND date(observed_at) = ?
+      ORDER BY price_amount_minor ASC
+      LIMIT 1
     `,
     args: [trackedDestinationId, latestDate]
   });
@@ -154,8 +157,78 @@ export async function getLatestPriceSnapshot(db: Client, trackedDestinationId: s
 
   return {
     latestDate,
-    currentLowMinor: Number(currentLow)
+    currentLowMinor: Number(currentLow),
+    flightSummary: summarizeFlightLegs(low.rows[0]?.raw_payload_json)
   };
+}
+
+interface RawFlightLeg {
+  airline?: string;
+  flight_number?: string;
+  departure_airport?: { id?: string; time?: string };
+  arrival_airport?: { id?: string; time?: string };
+}
+
+// Traditional-Chinese airline names keyed by IATA code (from the flight
+// number prefix, which is locale-independent). Unknown codes fall back to
+// the provider's original airline name.
+const AIRLINE_NAMES_ZH: Record<string, string> = {
+  GK: "捷星日本",
+  MM: "樂桃航空",
+  "6J": "索拉西德航空",
+  BC: "天馬航空",
+  "7G": "星悅航空",
+  IJ: "春秋航空日本",
+  NH: "全日空",
+  JL: "日本航空",
+  NU: "日本越洋航空",
+  HD: "AIRDO",
+  CI: "中華航空",
+  AE: "華信航空",
+  BR: "長榮航空",
+  B7: "立榮航空",
+  IT: "台灣虎航",
+  JX: "星宇航空",
+  CX: "國泰航空"
+};
+
+function localizeAirlineName(leg: RawFlightLeg): string {
+  const iataCode = leg.flight_number?.trim().split(/\s+/)[0]?.toUpperCase();
+  return (iataCode && AIRLINE_NAMES_ZH[iataCode]) || leg.airline || "Unknown airline";
+}
+
+// The SerpApi result stored in raw_payload_json carries the flight legs;
+// condense them to "airline flight-number dep→arr" for command replies.
+function summarizeFlightLegs(rawPayloadJson: unknown): string | undefined {
+  if (typeof rawPayloadJson !== "string") {
+    return undefined;
+  }
+
+  try {
+    const raw = JSON.parse(rawPayloadJson) as { flights?: RawFlightLeg[] };
+    const legs = Array.isArray(raw.flights) ? raw.flights : [];
+
+    if (legs.length === 0) {
+      return undefined;
+    }
+
+    const parts = legs.map((leg) => {
+      const airline = localizeAirlineName(leg);
+      const flightNumber = leg.flight_number ?? "";
+      const departureTime = extractClockTime(leg.departure_airport?.time);
+      const arrivalTime = extractClockTime(leg.arrival_airport?.time);
+      const times = departureTime && arrivalTime ? ` ${departureTime}→${arrivalTime}` : "";
+      return `${airline} ${flightNumber}${times}`.replace(/\s+/g, " ").trim();
+    });
+
+    return parts.join(" ➔ ");
+  } catch {
+    return undefined;
+  }
+}
+
+function extractClockTime(value: string | undefined): string | undefined {
+  return value?.split(" ")[1];
 }
 
 // Average of each day's cheapest observed fare over the window, excluding the
