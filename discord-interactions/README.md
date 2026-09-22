@@ -5,7 +5,7 @@ A small Cloudflare Worker that lets you interact with flight-price-radar directl
 | Command | What it does |
 |---|---|
 | `/price origin destination [cabin]` | Compares the current cheapest fare against the average of daily lows over the last 60 days and tells you whether it is cheap (便宜) or overpriced (溢價) |
-| `/track add origin destination [cabin] [trip]` | Start tracking a route (re-enables it if it exists) |
+| `/track add origin destination depart [return] [cabin] [trip]` | Start tracking a route for the given travel dates (YYYY-MM-DD); re-adding updates the dates |
 | `/track remove origin destination [cabin]` | Stop tracking a route |
 | `/track list` | List active tracked routes |
 | `/scan job` | Trigger the `normal-fares` / `business-deals` GitHub Actions workflow now |
@@ -58,5 +58,5 @@ With `DISCORD_GUILD_ID` (your server ID) the commands appear immediately; withou
 
 - Anyone who can see the commands in your server can use them. Restrict access per-command under **Server Settings → Integrations → your app** if needed.
 - `/price` compares the cheapest fare of the latest scan day against the average of each prior day's cheapest fare within 60 days (the latest day is excluded from the average). Verdict thresholds: ±5%.
-- `/track add` writes to `tracked_destinations` with defaults `GBP` / `en-GB`; the next scheduled scan picks it up automatically.
+- `/track add` writes to `tracked_destinations` with the given travel dates and defaults `GBP` / `en-GB`; the next scheduled scan picks it up automatically. The scanner skips routes without a departure date or whose departure date has passed (`/track list` flags them).
 - Logs: `npx wrangler tail` while testing.

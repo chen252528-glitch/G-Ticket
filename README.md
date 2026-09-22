@@ -145,7 +145,7 @@ Two workflows run the jobs on a schedule (`.github/workflows/normal-fares.yml` e
 The `discord-interactions/` folder contains a Cloudflare Worker that adds two-way interaction from Discord:
 
 - `/price origin destination [cabin]` — is the current fare cheap (便宜) or overpriced (溢價) versus the 60-day average?
-- `/track add | remove | list` — manage tracked routes without touching the database
+- `/track add | remove | list` — manage tracked routes without touching the database (`add` takes the travel dates the scanner needs)
 - `/scan normal-fares | business-deals` — trigger a run now via GitHub Actions
 - `/status` — when did each job last run/succeed/fail
 

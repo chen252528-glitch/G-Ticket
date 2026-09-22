@@ -75,7 +75,13 @@ function formatLeaseDebugSuffix(
   return ` (owner=${state.lockOwner ?? "none"}, lockedUntil=${state.lockedUntil ?? "none"}, lastStartedAt=${state.lastStartedAt ?? "none"})`;
 }
 
+// last_error is persisted and shown by the Discord /status command, so any
+// provider URL echoed by an error must have its API key masked first.
 function serializeError(error: unknown): string {
+  return redactSecrets(serializeErrorVerbatim(error));
+}
+
+function serializeErrorVerbatim(error: unknown): string {
   if (error instanceof Error) {
     return error.stack ?? `${error.name}: ${error.message}`;
   }
@@ -89,4 +95,8 @@ function serializeError(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+function redactSecrets(text: string): string {
+  return text.replace(/api_key=[^&\s]*/gi, "api_key=<redacted>");
 }

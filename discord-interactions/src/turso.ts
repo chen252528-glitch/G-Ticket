@@ -8,6 +8,8 @@ export interface TrackedRoute {
   cabin: string;
   trip: string;
   currencyCode: string;
+  departDate?: string;
+  returnDate?: string;
 }
 
 export interface PriceSnapshot {
@@ -30,6 +32,11 @@ export interface JobState {
   lastError?: string;
 }
 
+const ROUTE_COLUMNS = `
+  id, origin_airport_code, destination_airport_code, cabin_class, trip_type, currency_code,
+  departure_date_from, return_date_from
+`;
+
 export function createDb(env: Env): Client {
   return createClient({
     url: env.DATABASE_URL,
@@ -40,7 +47,7 @@ export function createDb(env: Env): Client {
 export async function listActiveRoutes(db: Client): Promise<TrackedRoute[]> {
   const result = await db.execute({
     sql: `
-      SELECT id, origin_airport_code, destination_airport_code, cabin_class, trip_type, currency_code
+      SELECT ${ROUTE_COLUMNS}
       FROM tracked_destinations
       WHERE is_active = 1
       ORDER BY origin_airport_code, destination_airport_code, cabin_class
@@ -67,7 +74,7 @@ export async function findActiveRoutes(
 
   const result = await db.execute({
     sql: `
-      SELECT id, origin_airport_code, destination_airport_code, cabin_class, trip_type, currency_code
+      SELECT ${ROUTE_COLUMNS}
       FROM tracked_destinations
       WHERE ${filters.join(" AND ")}
       ORDER BY cabin_class, trip_type
@@ -78,20 +85,45 @@ export async function findActiveRoutes(
   return result.rows.map(mapRouteRow);
 }
 
+// Re-adding an existing route (same id) updates its travel dates and
+// re-activates it; the scanner needs concrete dates for every active route.
 export async function upsertRoute(db: Client, route: {
   id: string;
   origin: string;
   destination: string;
   cabin: string;
   trip: string;
+  departDate: string;
+  returnDate?: string;
 }): Promise<void> {
+  const returnDate = route.trip === "round_trip" ? route.returnDate ?? null : null;
+
   await db.execute({
     sql: `
-      INSERT INTO tracked_destinations (id, origin_airport_code, destination_airport_code, trip_type, cabin_class, is_active)
-      VALUES (?, ?, ?, ?, ?, 1)
-      ON CONFLICT(id) DO UPDATE SET is_active = 1, updated_at = CURRENT_TIMESTAMP
+      INSERT INTO tracked_destinations (
+        id, origin_airport_code, destination_airport_code, trip_type, cabin_class,
+        departure_date_from, departure_date_to, return_date_from, return_date_to, is_active
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      ON CONFLICT(id) DO UPDATE SET
+        departure_date_from = excluded.departure_date_from,
+        departure_date_to = excluded.departure_date_to,
+        return_date_from = excluded.return_date_from,
+        return_date_to = excluded.return_date_to,
+        is_active = 1,
+        updated_at = CURRENT_TIMESTAMP
     `,
-    args: [route.id, route.origin, route.destination, route.trip, route.cabin]
+    args: [
+      route.id,
+      route.origin,
+      route.destination,
+      route.trip,
+      route.cabin,
+      route.departDate,
+      route.departDate,
+      returnDate,
+      returnDate
+    ]
   });
 }
 
@@ -189,7 +221,8 @@ const AIRLINE_NAMES_ZH: Record<string, string> = {
   B7: "立榮航空",
   IT: "台灣虎航",
   JX: "星宇航空",
-  CX: "國泰航空"
+  CX: "國泰航空",
+  TR: "酷航"
 };
 
 function localizeAirlineName(leg: RawFlightLeg): string {
@@ -296,7 +329,9 @@ function mapRouteRow(row: Record<string, unknown>): TrackedRoute {
     destination: String(row.destination_airport_code),
     cabin: String(row.cabin_class),
     trip: String(row.trip_type),
-    currencyCode: String(row.currency_code)
+    currencyCode: String(row.currency_code),
+    departDate: optionalString(row.departure_date_from),
+    returnDate: optionalString(row.return_date_from)
   };
 }
 

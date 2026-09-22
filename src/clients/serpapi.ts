@@ -17,6 +17,7 @@ interface SerpApiSearchResponse {
 }
 
 const DEFAULT_SERPAPI_BASE_URL = "https://serpapi.com/search.json";
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export function parseSerpApiFlightResults(payload: unknown): SerpApiFlightResult[] {
   if (!Array.isArray(payload)) {
@@ -45,6 +46,12 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
 
   return {
     async searchFlights(destination: TrackedDestination): Promise<SerpApiFlightResult[]> {
+      const problem = getSerpApiSearchProblem(destination);
+
+      if (problem) {
+        throw new Error(`SerpApi search refused for ${destination.id}: ${problem}`);
+      }
+
       const requestUrl = buildSerpApiUrl(destination, config);
       const response = await fetchImpl(requestUrl, {
         method: "GET",
@@ -55,8 +62,10 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
+        // The request URL carries the API key and this message ends up in
+        // job_scheduler_state.last_error (and Discord /status), so mask it.
         throw new Error(
-          `SerpApi request failed with status ${response.status} url=${requestUrl} body=${errorText}`
+          redactSerpApiKey(`SerpApi request failed with status ${response.status} url=${requestUrl} body=${errorText}`)
         );
       }
 
@@ -64,6 +73,34 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
       return parseSerpApiSearchResponse(payload);
     }
   };
+}
+
+// google_flights rejects requests without outbound_date (and return_date for
+// round trips), so a route missing them can never be searched successfully.
+export function getSerpApiSearchProblem(destination: TrackedDestination): string | undefined {
+  if (!destination.departureDateFrom) {
+    return "no departure date (google_flights requires outbound_date)";
+  }
+
+  if (!ISO_DATE_PATTERN.test(destination.departureDateFrom)) {
+    return `invalid departure date "${destination.departureDateFrom}" (expected YYYY-MM-DD)`;
+  }
+
+  if (destination.tripType === "round_trip") {
+    if (!destination.returnDateFrom) {
+      return "round trip has no return date (google_flights requires return_date)";
+    }
+
+    if (!ISO_DATE_PATTERN.test(destination.returnDateFrom)) {
+      return `invalid return date "${destination.returnDateFrom}" (expected YYYY-MM-DD)`;
+    }
+  }
+
+  return undefined;
+}
+
+export function redactSerpApiKey(text: string): string {
+  return text.replace(/api_key=[^&\s]*/gi, "api_key=<redacted>");
 }
 
 export function parseSerpApiSearchResponse(payload: unknown): SerpApiFlightResult[] {

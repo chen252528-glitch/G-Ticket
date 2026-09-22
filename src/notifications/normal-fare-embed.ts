@@ -83,7 +83,8 @@ const AIRLINE_NAMES_ZH: Record<string, string> = {
   B7: "立榮航空",
   IT: "台灣虎航",
   JX: "星宇航空",
-  CX: "國泰航空"
+  CX: "國泰航空",
+  TR: "酷航"
 };
 
 function localizeAirlineName(leg: RawFlightLeg): string {

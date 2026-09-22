@@ -106,6 +106,8 @@ slash commands 雙向互動（查價、管理航線、手動觸發掃描）。
 
 ### ⚠️ 待修程式 bug（2026-07-05 發現,未改碼）
 
+> **2026-09-22 更新:bug 1–3 已修(見下方「2026-09-22 家用機進度更新」節);bug 4 與 init-database.ts 同步仍未修。**
+
 1. **掃描器要求每條航線有確切日期**：`buildSerpApiUrl` 只在 `departureDateFrom` 存在時才帶
    `outbound_date`,而 SerpApi google_flights **必填** → 無日期的航線讓整個 normal-fares job 炸掉
    （`runNormalFaresJob` 的迴圈沒有逐條 try/catch,一條 400 全滅）。
@@ -155,6 +157,46 @@ slash commands 雙向互動（查價、管理航線、手動觸發掃描）。
   **NRT→KMJ 9 筆（低 ¥6,990）、HND→KMJ 19 筆（低 ¥12,980）**,均 2026-09-16 one_way。
   已新增 `td_nrt_kmj_economy_one_way`。注意：sink 會把當次警報標記為已發送（fingerprint 含價格,
   同價不重發,新低價仍會發）。
+
+## 2026-09-22 家用機進度更新(Claude)— 航線換成東京台北來回、bug 1–3 修完
+
+### 資料庫(線上 Turso,已直接改)
+
+- 熊本兩條 `td_hnd_kmj_economy_one_way`、`td_nrt_kmj_economy_one_way` **停用**(is_active=0;歷史 1332+447 筆保留)。
+  原因:出發日 2026-09-16 過期 → 9/18 起每天 SerpApi 400、整個 job 掛掉(正是 bug 1)。7/05→9/17 天天成功、共 8 則警報(最後 7/18)。
+- 東京台北三條 **啟用**並補日期:HND→TPE、HND→TSA、NRT→TPE,皆 economy/round_trip/JPY/ja-JP,
+  **2026-12-26 去、2027-01-10 回**(departure_date_from/to、return_date_from/to 都填同一天)。
+  刻意不用「把熊本列改目的地」的方式:id 綁著 1779 筆熊本觀測,改目的地會讓 60 天平均與歷史最低比較全部混掉。
+- `job_scheduler_state.last_error` 原本存了含完整 SerpApi api_key 的 URL(`/status` 印前 120 字 → 金鑰前 8 碼曾露出),
+  已 REPLACE 成 `api_key=<redacted>`;程式端也已改成寫入前遮蔽(見下)。
+- 2026-09-22 13:24 UTC 家用機手動掃一次(sink 吃警報,同 7/05 手法):3 條全成功,入庫 9+8+21 筆,11 則警報標為已發。
+  最低價 HND→TPE ¥93,667(台灣虎航 IT217)、HND→TSA ¥142,840(長榮 BR189)、NRT→TPE ¥75,045(酷航 TR875)。
+
+### 程式修改(已 commit+push)
+
+- **bug 1+3 根治 — `src/jobs/normal-fares.ts` 逐條隔離**:每條航線各自 try/catch,一條炸不影響其他;
+  警報(sendEmbed+recordFareAlert)也各自 try/catch — 觀測值已入庫、警報不記錄,下次再試。
+  全部跑完後若有失敗才丟 `NormalFaresJobError`(訊息第一行 = `N/M routes failed, K alerts failed; <第一個失敗>`,`/status` 看得到)。
+  無日期 / 出發日已過 / 來回缺回程的航線 **跳過並 warn,不算失敗**(`getRouteSkipReason`;deps.now / logger 可注入供測試)。
+- **bug 1 前端擋 — `src/clients/serpapi.ts`**:`getSerpApiSearchProblem()` 缺日期直接拒絕、不浪費額度;
+  錯誤訊息經 `redactSerpApiKey()` 遮金鑰;`persistent-job-runner.ts` 寫 last_error 前再遮一次。
+- **bug 2 — Worker `/track add` 新增 `depart`(必填)與 `return`(來回必填)**:格式、真實日期、未過期、回程不早於出發全驗證,
+  錯誤訊息繁中。同 id 再 add 會**更新日期並重新啟用**。`/track list` 與 `/price` 顯示日期;list 對無日期/過期航線加 ⚠️。
+  `register-commands.mjs` 必填選項排在選填前(Discord 規定)。
+- 測試 22 → **31/31**(新增 `serpapi.test.ts` 5 個、normal-fares 4 個);Worker typecheck 通過。航空公司表補 TR 酷航(兩張表)。
+- 坑:Git Bash 單一指令超過約 8K 字元會被截斷(heredoc 寫大檔會報 `unexpected EOF`)→ 大檔用 Write 工具或分段。
+
+### ⬜ 未完成(需要本人)
+
+1. **Worker 尚未部署、指令尚未重新註冊**:wrangler 的 OAuth token 已過期、非互動環境無法刷新。
+   請在終端機跑 `cd discord-interactions && npx wrangler login`(瀏覽器點 Allow),之後 Claude 接手
+   `npm run deploy` 與 `register-commands`(DISCORD_APPLICATION_ID=1523212807309361252、DISCORD_GUILD_ID=1523212063525175386、bot token 在 .dev.vars)。
+   **部署前別先註冊指令**:舊 Worker 會忽略 depart/return,加出無日期航線。
+2. **palserver 還在跑舊碼**:`cd /home/palserver/Desktop/G-Ticket && git pull && npm ci && npm run build`。
+   不拉也行 — 現在 3 條航線日期都合法,舊碼明早 08:00 也能跑;但要有逐條隔離就得拉。
+3. 仍未修:bug 4(Node 24 util.inspect 崩潰)、`init-database.ts` 與 migration 001 不同步、
+   `/track add` 新航線幣別預設 GBP/en-GB(想預設 JPY 要改 upsertRoute 或 DB DEFAULT)。
+4. SerpApi 額度:3 條 × 31 天 = 93 次/月(免費 250)。出發日 12/26 一過,三條會自動被跳過,不再耗額度。
 
 ## 待辦步驟（依序）
 

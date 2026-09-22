@@ -18,7 +18,7 @@ const cabinChoices = [
 const originOption = {
   type: OPTION_TYPE_STRING,
   name: "origin",
-  description: "Origin airport/metro code, e.g. LON",
+  description: "Origin airport/metro code, e.g. HND",
   required: true,
   min_length: 3,
   max_length: 3
@@ -27,7 +27,7 @@ const originOption = {
 const destinationOption = {
   type: OPTION_TYPE_STRING,
   name: "destination",
-  description: "Destination airport code, e.g. HND",
+  description: "Destination airport code, e.g. TPE",
   required: true,
   min_length: 3,
   max_length: 3
@@ -41,6 +41,37 @@ const cabinOption = {
   choices: cabinChoices
 };
 
+// The scanner can only search routes with concrete travel dates (Google
+// Flights requires them), so the departure date is mandatory here.
+const departOption = {
+  type: OPTION_TYPE_STRING,
+  name: "depart",
+  description: "Departure date, YYYY-MM-DD (e.g. 2026-12-26)",
+  required: true,
+  min_length: 10,
+  max_length: 10
+};
+
+const returnOption = {
+  type: OPTION_TYPE_STRING,
+  name: "return",
+  description: "Return date, YYYY-MM-DD (required for round_trip)",
+  required: false,
+  min_length: 10,
+  max_length: 10
+};
+
+const tripOption = {
+  type: OPTION_TYPE_STRING,
+  name: "trip",
+  description: "Trip type (default: round_trip)",
+  required: false,
+  choices: [
+    { name: "round_trip", value: "round_trip" },
+    { name: "one_way", value: "one_way" }
+  ]
+};
+
 const commands = [
   {
     name: "track",
@@ -49,22 +80,9 @@ const commands = [
       {
         type: OPTION_TYPE_SUB_COMMAND,
         name: "add",
-        description: "Track a route (re-enables it if it already exists)",
-        options: [
-          originOption,
-          destinationOption,
-          cabinOption,
-          {
-            type: OPTION_TYPE_STRING,
-            name: "trip",
-            description: "Trip type (default: round_trip)",
-            required: false,
-            choices: [
-              { name: "round_trip", value: "round_trip" },
-              { name: "one_way", value: "one_way" }
-            ]
-          }
-        ]
+        description: "Track a route for given travel dates (re-adding updates the dates)",
+        // Discord requires every required option to come before optional ones.
+        options: [originOption, destinationOption, departOption, returnOption, cabinOption, tripOption]
       },
       {
         type: OPTION_TYPE_SUB_COMMAND,

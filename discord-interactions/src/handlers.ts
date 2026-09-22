@@ -18,6 +18,7 @@ const PRICE_VERDICT_BAND_PERCENT = 5;
 
 const VALID_CABINS = ["economy", "premium_economy", "business", "first"];
 const VALID_TRIPS = ["round_trip", "one_way"];
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const CABIN_ZH: Record<string, string> = {
   economy: "經濟艙",
@@ -113,7 +114,12 @@ async function handleTrack(interaction: Interaction, env: Env): Promise<FollowUp
       return { content: "目前沒有監控中的航線。用 `/track add` 新增。" };
     }
 
-    const lines = routes.map((route) => `• ${formatRoute(route)}`);
+    const today = todayIsoDate();
+    const lines = routes.map((route) => {
+      const blocker = describeScanBlocker(route, today);
+      return `• ${formatRoute(route)}${blocker ? ` ⚠️ ${blocker}` : ""}`;
+    });
+
     return { content: `**目前監控中的航線(${routes.length} 條)**\n${lines.join("\n")}` };
   }
 
@@ -124,14 +130,19 @@ async function handleTrack(interaction: Interaction, env: Env): Promise<FollowUp
   if (subcommand.name === "add") {
     const trip = normalizeChoice(getStringOption(subcommand.options, "trip"), VALID_TRIPS) ?? "round_trip";
     const cabinClass = cabin ?? "economy";
+    const { departDate, returnDate } = requireTravelDates(subcommand.options, trip);
     const id = `td_${origin}_${destination}_${cabinClass}_${trip}`.toLowerCase();
 
-    await upsertRoute(db, { id, origin, destination, cabin: cabinClass, trip });
+    await upsertRoute(db, { id, origin, destination, cabin: cabinClass, trip, departDate, returnDate });
+
+    const label =
+      `${origin} → ${destination}` +
+      `(${CABIN_ZH[cabinClass] ?? cabinClass},${TRIP_ZH[trip] ?? trip},${formatTravelDates(trip, departDate, returnDate)})`;
 
     return {
       content: [
-        `✅ 已開始監控 **${origin} → ${destination}**(${CABIN_ZH[cabinClass] ?? cabinClass},${TRIP_ZH[trip] ?? trip})。`,
-        "⚠️ 注意:此指令目前不會設定出發/回程日期,排程掃描還不支援無日期的航線 — 請先找 Claude 幫這條航線補日期,否則掃描會失敗。"
+        `✅ 已開始監控 **${label}**。`,
+        "下次排程掃描就會開始抓價;同一條航線再下一次 `/track add` 可以更新日期。"
       ].join("\n")
     };
   }
@@ -294,7 +305,94 @@ function buildVerdictLine(deltaPercent: number): string {
 function formatRoute(route: TrackedRoute): string {
   const cabin = CABIN_ZH[route.cabin] ?? route.cabin;
   const trip = TRIP_ZH[route.trip] ?? route.trip;
-  return `${route.origin} → ${route.destination}(${cabin},${trip})`;
+  const dates = route.departDate ? `,${formatTravelDates(route.trip, route.departDate, route.returnDate)}` : "";
+  return `${route.origin} → ${route.destination}(${cabin},${trip}${dates})`;
+}
+
+function formatTravelDates(trip: string, departDate: string, returnDate?: string): string {
+  if (trip === "round_trip" && returnDate) {
+    return `${departDate} ~ ${returnDate}`;
+  }
+
+  return `${departDate} 出發`;
+}
+
+// Mirrors the scanner's skip rules so /track list shows why a route sits idle.
+function describeScanBlocker(route: TrackedRoute, today: string): string | undefined {
+  if (!route.departDate) {
+    return "沒有出發日,排程不會掃描;請用 /track add 重新加入並填日期";
+  }
+
+  if (route.departDate < today) {
+    return "出發日已過,排程不會掃描";
+  }
+
+  if (route.trip === "round_trip" && !route.returnDate) {
+    return "沒有回程日,排程不會掃描;請用 /track add 重新加入並填 return";
+  }
+
+  return undefined;
+}
+
+// The scanner can only search routes with concrete dates (google_flights
+// insists on outbound_date / return_date), so /track add demands them up front.
+function requireTravelDates(
+  options: CommandOption[] | undefined,
+  trip: string
+): { departDate: string; returnDate?: string } {
+  const departDate = getIsoDateOption(options, "depart", "出發日");
+
+  if (!departDate) {
+    throw new Error("請填 `depart`(出發日,YYYY-MM-DD),排程掃描需要確切日期。");
+  }
+
+  const returnDate = getIsoDateOption(options, "return", "回程日");
+  const today = todayIsoDate();
+
+  if (departDate < today) {
+    throw new Error(`出發日 ${departDate} 已經過了,請填今天(${today})或之後的日期。`);
+  }
+
+  if (trip === "round_trip") {
+    if (!returnDate) {
+      throw new Error("來回航線請填 `return`(回程日,YYYY-MM-DD);單程請把 `trip` 設為 one_way。");
+    }
+
+    if (returnDate < departDate) {
+      throw new Error(`回程日 ${returnDate} 不能早於出發日 ${departDate}。`);
+    }
+
+    return { departDate, returnDate };
+  }
+
+  if (returnDate) {
+    throw new Error("單程航線不用填 `return`;要來回請把 `trip` 設為 round_trip。");
+  }
+
+  return { departDate };
+}
+
+function getIsoDateOption(options: CommandOption[] | undefined, name: string, label: string): string | undefined {
+  const value = getStringOption(options, name)?.trim();
+
+  if (!value) {
+    return undefined;
+  }
+
+  if (!ISO_DATE_PATTERN.test(value) || !isRealCalendarDate(value)) {
+    throw new Error(`${label}「${value}」格式不對,請用 YYYY-MM-DD(例如 2026-12-26)。`);
+  }
+
+  return value;
+}
+
+function isRealCalendarDate(value: string): boolean {
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 // JPY renders as ¥ with an optional ≈NT$ conversion; TWD renders as NT$;
